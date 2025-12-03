@@ -1,276 +1,460 @@
 # Taboo Subscriptions Sync
 
-Serviço Back-End (NestJS) para análise, classificação e sincronização de assinaturas vindas da Whop (e futuros provedores).
+Back-End Service (NestJS) for analysis and classification of subscriptions from multiple payment providers.
 
-## 🎯 Abordagem Principal
+## Multi-Provider Architecture
 
-**Análise via API (Polling Direto)** - Não dependemos de webhooks! O sistema faz queries diretas na API do Whop para identificar:
+This microservice supports integration with multiple payment providers through an adapter-based architecture:
 
-- ✅ Usuários em trial
-- ✅ Conversões (trialing → active)
-- ✅ Não conversões (trialing → canceled/expired)
-- ✅ Renovações mensais e anuais
-- ✅ Primeiros pagamentos
+- ✅ **Whop** (implemented)
+- 🔜 **Apple Pay** (ready for implementation)
+- 🔜 **Google Pay** (ready for implementation)
 
-📖 **Veja o fluxo completo em:** [FLUXO.md](./FLUXO.md)
+### Active Providers
 
-## 🏗️ Arquitetura
+Configure active providers through the environment variable:
 
-O sistema foi projetado para ser **escalável e multi-provedor**:
+```env
+ENABLED_PROVIDERS=whop,applepay,googlepay
+```
 
-- **WhopModule**: Contém tudo relacionado ao Whop (análise, backfill, memberships, payments, plans)
-- **ConsolidatedModule**: Agrega dados de TODOS os provedores (interface unificada)
-- **MetricsModule**: Métricas consolidadas de todos os provedores
+## Main Approach
 
-Quando adicionar novos provedores (Stripe, PayPal, etc), cada um terá seu próprio módulo com seus próprios memberships, payments e plans, e serão agregados no `ConsolidatedModule`.
+**API Analysis (Direct Polling)** - The system makes direct queries to the Whop API to identify:
 
-📖 **Veja o fluxo completo em:** [FLUXO.md](./FLUXO.md)
+- Users in trial
+- Conversions (trial → active with first payment)
+- Non-conversions (trial → canceled/expired without payment)
+- Monthly and annual renewals
+- First payments
 
-## 🛡️ Proteções Anti-Poison Pill Implementadas
+## Multi-Provider Architecture
 
-Este serviço implementa múltiplas camadas de proteção para evitar falhas em cascata, loops infinitos e sobrecarga do sistema:
+```
+src/
+├── domain/
+│   └── subscriptions/           # Unified domain models
+│       ├── interfaces/          # ProviderAdapter, MembershipAnalyzer, etc.
+│       ├── models/              # Membership, Payment, Renewal, etc.
+│       └── mappers/             # Whop/Apple/Google → Domain
+├── core/
+│   └── providers/               # Provider Registry
+│       ├── provider-registry.service.ts
+│       └── provider-metadata.decorator.ts
+└── modules/
+    ├── providers/
+    │   ├── whop/                # Whop Provider
+    │   │   ├── adapters/
+    │   │   │   ├── whop-adapter.service.ts
+    │   │   │   └── whop-api-client.service.ts
+    │   │   ├── analysis/
+    │   │   │   ├── memberships/
+    │   │   │   └── renewals/
+    │   │   └── whop.module.ts
+    │   ├── applepay/            # Future: Apple Pay
+    │   └── googlepay/           # Future: Google Pay
+    └── consolidated/            # Aggregates all providers
+        ├── controllers/
+        │   └── consolidated-analysis.controller.ts
+        └── services/
+            └── consolidated-analysis.service.ts
+```
 
-### ⚠️ **IMPORTANTE: Análise via API (Polling Direto)**
+**Principles:**
 
-**NÃO dependemos de webhooks!** O sistema usa **análise direta via API**:
+- Each provider is an isolated module
+- Failure in one provider doesn't affect others (independent circuit breakers)
+- New providers can be added without modifying existing code
+- Consolidated API automatically aggregates all active providers
 
-1. **Polling direto na API** - Consulta a API do Whop para obter dados atualizados
-2. **Análise inteligente** - Identifica trials, conversões, renovações baseado em dados reais
-3. **Reconciliação periódica** - Valida e corrige discrepâncias
-
-Isso garante que sempre temos dados atualizados e confiáveis, sem depender de webhooks que podem falhar.
-
-### 1. Circuit Breaker
-
-- **Localização**: `src/core/circuit-breaker/`
-- **Proteção**: Previne chamadas à Whop API quando ela está indisponível
-- **Configuração**: Via variáveis de ambiente (`CIRCUIT_BREAKER_*`)
-- **Monitoramento**: Estado exposto no healthcheck
-
-### 2. Timeouts
-
-- **Localização**: `src/core/timeout/`
-- **Proteção**: Limita tempo máximo de execução de operações
-- **Aplicado em**:
-  - Análise: 5min
-  - Backfill: 30min
-  - API calls: 10s
-  - DB queries: 5s
-
-### 3. Limites de Processamento
-
-- **Localização**: `src/core/limits/`
-- **Proteção**: Previne processamento infinito
-- **Limites**:
-  - Max records por run: 10.000
-  - Max processing time: 30min
-  - Max pages: 1.000
-
-### 4. Validação Rigorosa de Payloads
-
-- **Localização**: `src/core/validation/`
-- **Proteção**: Rejeita payloads malformados antes de processar
-- **Validações**:
-  - Estrutura básica
-  - Campos obrigatórios
-  - Validação com DTOs (class-validator)
-
-### 5. Dead Letter Queue (DLQ)
-
-- **Localização**: `src/core/dlq/`
-- **Proteção**: Armazena eventos falhos sem encher o sistema
-- **Limites**:
-  - Max size: 10.000 eventos
-  - Retention: 7 dias
-  - Alert threshold: 8.000 eventos
-- **Rotação**: Automática de eventos antigos
-
-### 6. Healthcheck Inteligente
-
-- **Localização**: `src/modules/health/`
-- **Endpoint**: `GET /api/health`
-- **Verifica**:
-  - Database connection
-  - Whop API (circuit breaker state)
-  - Queue size
-  - DLQ size
-  - Circuit breakers status
-  - Memory e disk
-
-### 7. Graceful Degradation
-
-- **Localização**: `src/core/graceful-degradation/`
-- **Proteção**: Sistema continua funcionando mesmo com componentes falhando
-- **Comportamento**:
-  - Se Whop API cair: circuit breaker protege, análise falha gracefully
-  - Se DB cair: rejeita novas análises (503) mas não quebra
-  - Se queue encher: rejeita novos eventos (503) com retry-after
-
-### 8. Rate Limiting
-
-- **Configuração**: Via `@nestjs/throttler`
-- **Limite**: 100 requests/min por endpoint
-- **Aplicado em**: Todos os endpoints públicos
-
-### 9. Checkpoint em Jobs Longos
-
-- **Localização**: `src/core/checkpoint/`
-- **Proteção**: Permite retomar backfill de onde parou
-- **Aplicado em**: Backfill de memberships e payments
-- **Salvamento**: A cada batch processado
-
-### 10. Logs e Alertas
-
-- **Logger**: Pino (estruturado)
-- **Logs de proteções**: Todas as proteções ativadas são logadas
-- **Alertas críticos**:
-  - DLQ > 80% do limite
-  - Circuit breaker aberto por > 5min
-  - Backfill timeout > 3x
-  - Queue size > 1000 eventos
-  - Taxa de erro em análises > 10%
-
-### 11. Reconciliação Periódica
-
-- **Localização**: `src/modules/whop/services/reconciliation.service.ts`
-- **Proteção**: Detecta gaps comparando nosso DB com Whop API (fonte da verdade)
-- **Frequência**: Diariamente às 2h (configurável)
-- **Endpoint manual**: `POST /api/jobs/reconciliation`
-- **O que faz**:
-  - Compara memberships do nosso DB com Whop API
-  - Compara payments do nosso DB com Whop API
-  - Detecta registros faltando
-  - Detecta registros desatualizados
-  - Sincroniza automaticamente
-
-## 🚀 Instalação
+## Installation
 
 ```bash
 npm install
 ```
 
-## ⚙️ Configuração
+## Configuration
 
-Copie `.env.example` para `.env` e configure as variáveis:
+Copy `.env.example` to `.env` and configure:
 
 ```bash
 cp .env.example .env
 ```
 
-## 🏃 Execução
+Required variables:
+
+```env
+PORT=3001
+WHOP_API_KEY=
+WHOP_COMPANY_ID=
+WHOP_BASE_URL=https://api.whop.com/api/v1
+TRIAL_PERIOD_DAYS=3
+```
+
+## Execution
 
 ```bash
-# Desenvolvimento
+# Development
 npm run start:dev
 
-# Produção
+# Production
 npm run build
 npm run start:prod
 ```
 
-## 📡 Endpoints
+## Endpoints
 
-### Análise (Principal) ⭐
+**Authentication:** All analysis endpoints require an `Authorization` header.
 
-- `GET /api/analysis/memberships?startDate=2024-01-01&endDate=2024-01-31` - Análise completa
-- `GET /api/analysis/trials` - Apenas usuários em trial
-- `GET /api/analysis/conversions` - Apenas conversões
-- `GET /api/analysis/renewals?type=all|monthly|yearly` - Apenas renovações
+### Consolidated Endpoints (Multi-Provider)
 
-**Todos retornam emails para exportação!** 📊 Veja: [FLUXO.md](./FLUXO.md)
+#### GET /api/consolidated/analysis
 
-### Backfill
+Analyzes subscriptions from **all active providers** in a single call.
 
-- `POST /api/jobs/backfill/memberships` - Backfill de memberships
-- `POST /api/jobs/backfill/payments` - Backfill de payments
+**Query Parameters:**
 
-### Reconciliação
+- `providers` (optional): Comma-separated list of providers. Default: all
+- `startDate` (optional): Start date in ISO 8601. Default: yesterday 00:00:00 UTC
+- `endDate` (optional): End date in ISO 8601. Default: yesterday 23:59:59 UTC
+- `status` (optional): Filter by status
 
-- `POST /api/jobs/reconciliation` - Reconciliação manual (detecta gaps)
-
-### Health
-
-- `GET /api/health` - Healthcheck do sistema
-
-## 🔍 Monitoramento
-
-Todas as proteções são monitoradas via:
-
-- Healthcheck endpoint
-- Logs estruturados (Pino)
-- Métricas de circuit breakers
-- Tamanho do DLQ
-
-## 📝 Notas
-
-- As proteções são ativadas automaticamente quando os limites são atingidos
-- **Análise via API** garante dados sempre atualizados, sem depender de webhooks
-- Backfill pode ser retomado de onde parou usando checkpoints
-- **Todos os endpoints de análise retornam emails** para fácil exportação para planilhas
-- Reconciliação periódica valida e corrige discrepâncias
-
-## 📊 Análise via API
-
-### Como Funciona
-
-O sistema faz **polling direto na API do Whop** para identificar todos os cenários:
-
-1. **Busca memberships** por status (trialing, active, canceled, expired)
-2. **Busca payments** para análise de renovações
-3. **Analisa e classifica** cada cenário baseado em dados reais
-4. **Retorna emails** junto com os dados para exportação
-
-### Endpoints Disponíveis
-
-- `GET /api/analysis/memberships` - Análise completa com todos os cenários
-- `GET /api/analysis/trials` - Apenas trials
-- `GET /api/analysis/conversions` - Apenas conversões
-- `GET /api/analysis/renewals` - Apenas renovações (mensal/anual)
-
-📖 **Veja o fluxo completo em:** [FLUXO.md](./FLUXO.md)
-
-## 📋 Exportação para Planilha
-
-Todos os endpoints retornam **emails** junto com os dados:
+**Response:**
 
 ```json
 {
-  "emails": {
-    "usersInTrial": ["user1@email.com", ...],
-    "convertedUsers": ["user2@email.com", ...],
-    "monthlyRenewals": ["user3@email.com", ...],
-    ...
+  "period": {
+    "startDate": "2025-12-01T00:00:00.000Z",
+    "endDate": "2025-12-01T23:59:59.999Z"
+  },
+  "providers": {
+    "whop": {
+      "success": true,
+      "data": {
+        "memberships": { ... },
+        "renewals": { ... }
+      },
+      "metadata": { ... }
+    },
+    "applepay": {
+      "success": true,
+      "data": { ... }
+    }
+  },
+  "metadata": {
+    "totalProcessingTime": 1234,
+    "providersIncluded": 2,
+    "providersSucceeded": 2,
+    "providersFailed": 0
   }
 }
 ```
 
-📖 **Veja o fluxo completo em:** [FLUXO.md](./FLUXO.md)
+**Example call:**
 
-## 🔄 Reconciliação
+```bash
+# Consolidated analysis of yesterday (all providers)
+curl -H "Authorization: Bearer TOKEN" http://localhost:3001/api/consolidated/analysis
 
-### Por que é necessário?
+# Analysis of a specific period
+curl -H "Authorization: Bearer TOKEN" "http://localhost:3001/api/consolidated/analysis?startDate=2025-11-27T00:00:00Z&endDate=2025-11-30T23:59:59Z"
 
-Mesmo com análise via API, a reconciliação serve como validação adicional:
-
-- Detecta gaps que possam ter sido perdidos
-- Valida consistência dos dados
-- Sincroniza automaticamente
-
-### Como funciona?
-
-1. **Automática**: Executa diariamente às 2h (configurável via `RECONCILIATION_INTERVAL_HOURS`)
-2. **Manual**: Via endpoint `POST /api/jobs/reconciliation`
-3. **Processo**:
-   - Busca memberships/payments da Whop API (fonte da verdade)
-   - Compara com nosso DB
-   - Detecta gaps (registros faltando)
-   - Detecta desatualizações
-   - Sincroniza automaticamente
-
-### Configuração
-
-```env
-RECONCILIATION_ENABLED=true
-RECONCILIATION_INTERVAL_HOURS=24
+# Specific providers only
+curl -H "Authorization: Bearer TOKEN" "http://localhost:3001/api/consolidated/analysis?providers=whop,applepay"
 ```
-# taboo-subscriptions-sync
+
+---
+
+### Provider-Specific Endpoints
+
+#### Whop
+
+##### GET /api/analysis/whop/renewals
+
+Analyzes renewals (subscription_cycle) in the period.
+
+**Query Parameters:**
+
+- `month` (optional): Month (1-12). Default: current month
+- `year` (optional): Year (2020-2100). Default: current year
+- `status` (optional): Filter by status. Values: trialing, active, past_due, completed, canceled, expired, unresolved, drafted. Accepts comma-separated list (e.g., `?status=active,canceled`)
+
+**Response:**
+
+```json
+{
+  "analysis": {
+    "monthly": {
+      "count": 150,
+      "emails": ["user@email.com", ...],
+      "renewals": [
+        {
+          "id": "mem_xxx",
+          "userId": "user_xxx",
+          "email": "user@email.com",
+          "plan": {
+            "id": "plan_xxx",
+            "title": "Monthly Plan",
+            "billingPeriod": 30,
+            "renewalPrice": 9.99,
+            "currency": "usd",
+            "trialPeriodDays": 3
+          },
+          "nextRenewalDate": "2025-01-15T00:00:00.000Z",
+          "paidAt": "2025-12-15T10:30:00.000Z",
+          "amount": 9.99,
+          "billingReason": "subscription_cycle",
+          "membershipStatus": "active"
+        }
+      ]
+    },
+    "yearly": {
+      "count": 25,
+      "emails": [...],
+      "renewals": [...]
+    },
+    "stats": {
+      "total": 175,
+      "active": 150,
+      "canceled": 20,
+      "expired": 5,
+      ...
+    }
+  }
+}
+```
+
+**Example call:**
+
+```bash
+# Current month renewals (Whop)
+curl -H "Authorization: Bearer TOKEN" http://localhost:3001/api/analysis/whop/renewals
+
+# November 2025 renewals
+curl -H "Authorization: Bearer TOKEN" http://localhost:3001/api/analysis/whop/renewals?month=11&year=2025
+
+# Active renewals only
+curl -H "Authorization: Bearer TOKEN" "http://localhost:3001/api/analysis/whop/renewals?status=active"
+
+# Active and canceled renewals
+curl -H "Authorization: Bearer TOKEN" "http://localhost:3001/api/analysis/whop/renewals?status=active,canceled"
+```
+
+##### GET /api/analysis/whop/memberships
+
+Analyzes memberships: trials, conversions, non-conversions.
+
+**Query Parameters:**
+
+- `startDate` (optional): Start date in ISO 8601. Default: yesterday 00:00:00 UTC
+- `endDate` (optional): End date in ISO 8601. Default: yesterday 23:59:59 UTC
+- Default is yesterday (previous day)
+
+**Response:**
+
+```json
+{
+  "analysis": {
+    "trials": [
+      {
+        "id": "mem_xxx",
+        "userId": "user_xxx",
+        "email": "user@email.com",
+        "createdAt": "2025-12-01T10:00:00.000Z",
+        "status": "trialing",
+        "plan": {
+          "id": "plan_xxx",
+          "title": "Monthly Plan",
+          "billingPeriod": 30,
+          "renewalPrice": 9.99,
+          "currency": "usd",
+          "trialPeriodDays": 3
+        },
+        "trialEndsAt": "2025-12-04T10:00:00.000Z"
+      }
+    ],
+    "converted": [
+      {
+        "id": "mem_xxx",
+        "userId": "user_xxx",
+        "email": "user@email.com",
+        "convertedAt": "2025-12-04T10:00:00.000Z",
+        "plan": {...},
+        "firstPayment": {
+          "id": "pay_xxx",
+          "amount": 9.99,
+          "currency": "usd",
+          "paidAt": "2025-12-04T10:00:00.000Z"
+        }
+      }
+    ],
+    "notConverted": [
+      {
+        "id": "mem_xxx",
+        "userId": "user_xxx",
+        "email": "user@email.com",
+        "status": "canceled",
+        "createdAt": "2025-11-25T10:00:00.000Z",
+        "canceledAt": "2025-11-28T10:00:00.000Z",
+        "cancellationReason": null,
+        "plan": {...},
+        "trialEndsAt": "2025-11-28T10:00:00.000Z",
+        "daysInTrial": 3
+      }
+    ],
+    "firstPaid": [
+      {
+        "id": "mem_xxx",
+        "userId": "user_xxx",
+        "email": "user@email.com",
+        "paidAt": "2025-12-01T10:00:00.000Z",
+        "amount": 9.99,
+        "currency": "usd"
+      }
+    ]
+  }
+}
+```
+
+**Example call:**
+
+```bash
+# Analysis of yesterday (default) - Whop
+curl -H "Authorization: Bearer TOKEN" http://localhost:3001/api/analysis/whop/memberships
+
+# Analysis of a specific period
+curl -H "Authorization: Bearer TOKEN" "http://localhost:3001/api/analysis/whop/memberships?startDate=2025-11-27T00:00:00Z&endDate=2025-11-30T23:59:59Z"
+```
+
+---
+
+### GET /api/health
+
+System health check, including status of all active providers.
+
+**Response includes:**
+
+- Memory/CPU/Disk
+- Database status
+- Queue and DLQ status
+- **Circuit breakers per provider**
+- **Health status of each active provider**
+
+**Example response:**
+
+```json
+{
+  "status": "ok",
+  "info": {
+    "providers": {
+      "status": "up",
+      "total": 2,
+      "healthy": 2,
+      "unhealthy": 0,
+      "providers": {
+        "whop": {
+          "enabled": true,
+          "healthy": true,
+          "apiHealthy": true,
+          "circuitBreaker": { "state": "closed" }
+        },
+        "applepay": {
+          "enabled": true,
+          "healthy": true,
+          "apiHealthy": true,
+          "circuitBreaker": { "state": "closed" }
+        }
+      }
+    }
+  }
+}
+```
+
+## Implemented Protections
+
+### Circuit Breaker per Provider
+
+- **Failure isolation**: Each provider has its own circuit breaker
+- **Graceful degradation**: If Whop goes down, Apple Pay continues working
+- **Configurable via environment variables**
+- **Monitoring**: Health check shows state of each circuit breaker
+
+### Timeouts
+
+- Analysis: 5min
+- API calls: 10s
+
+### Pagination Limits
+
+- Max pages: 200 per request
+- Automatic deduplication
+
+### Plan Cache
+
+- TTL: 5 minutes
+- Batch warmup before processing
+
+### Graceful Degradation
+
+- If Whop API goes down: circuit breaker protects
+- Fallbacks to partial data when possible
+
+## Definitions
+
+### Renewal
+
+Payment with `billing_reason: subscription_cycle`. Represents a recurring billing cycle.
+
+### First Payment
+
+Payment with `billing_reason: subscription_create`. Represents the first charge after trial.
+
+### Conversion (Converted)
+
+User with `active` status who has a `subscription_create` in the analyzed period.
+
+### Non-Conversion (Not Converted)
+
+User with `canceled` or `expired` status who does NOT have any `subscription_create`.
+
+### Trial
+
+User with `trialing` status created in the analyzed period.
+
+**Note:** The trial period is configured via the `TRIAL_PERIOD_DAYS` environment variable (default: 3 days).
+
+---
+
+## Adding New Providers
+
+See detailed guide: **[ADDING_NEW_PROVIDERS.md](./docs/ADDING_NEW_PROVIDERS.md)**
+
+**Summary:**
+
+1. Create directory structure in `src/modules/providers/{provider}/`
+2. Implement Mapper in `src/domain/subscriptions/mappers/{provider}-mapper.ts`
+3. Create API Client Service
+4. Implement Provider Adapter (implements `ProviderAdapter` interface)
+5. Create Provider Module
+6. Import in AppModule
+7. Add environment variables
+8. Test health check and consolidated endpoint
+
+**Estimated time:** 1-2 weeks per provider (after architecture is established)
+
+## Logs
+
+The system uses Pino for structured logs. Main logs:
+
+- Start/end of analyses
+- Result counts
+- API errors
+- Cache miss warnings
+
+## Technologies
+
+- NestJS
+- TypeScript
+- Pino (logs)
+- Opossum (circuit breaker)
+- class-validator/class-transformer (DTOs)
