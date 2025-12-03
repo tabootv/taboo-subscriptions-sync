@@ -1,3 +1,7 @@
+// IMPORTANT: Import polyfills FIRST before any other imports
+// This ensures crypto is available globally for @nestjs/schedule
+import './polyfills';
+
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
