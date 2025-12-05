@@ -12,7 +12,10 @@ export class MembershipsDomain {
   private readonly TRIAL_PERIOD_DAYS: number;
 
   constructor(private readonly configService: ConfigService) {
-    this.TRIAL_PERIOD_DAYS = this.configService.get<number>('TRIAL_PERIOD_DAYS', 3);
+    this.TRIAL_PERIOD_DAYS = this.configService.get<number>(
+      'TRIAL_PERIOD_DAYS',
+      3,
+    );
   }
 
   /**
@@ -61,12 +64,10 @@ export class MembershipsDomain {
   private isConversionPayment(payment: any, trialMembership: any): boolean {
     const billingReason = payment.billing_reason || payment.reason;
 
-    // subscription_create always indicates conversion
     if (billingReason === 'subscription_create') {
       return true;
     }
 
-    // subscription_cycle within trial window can also indicate conversion
     if (billingReason === 'subscription_cycle') {
       return this.isWithinTrialWindow(payment, trialMembership);
     }

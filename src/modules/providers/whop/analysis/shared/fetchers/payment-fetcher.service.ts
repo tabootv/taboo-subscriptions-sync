@@ -1,20 +1,45 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { logger } from '../../../../../../core/logger/logger.config';
+import { delay } from '../../../../../../core/utils';
 import { WhopApiClientService } from '../../../adapters/whop-api-client.service';
 
 @Injectable()
 export class PaymentFetcherService {
   private readonly logger = logger();
   private readonly MAX_PAGES = 200;
+  private readonly pageDelayMs: number;
 
-  constructor(private readonly whopApiClient: WhopApiClientService) {}
-
-  async fetchSubscriptionCyclePayments(startDate: Date, endDate: Date): Promise<any[]> {
-    return this.fetchPaymentsByBillingReason('subscription_cycle', startDate, endDate);
+  constructor(
+    private readonly whopApiClient: WhopApiClientService,
+    private readonly configService: ConfigService,
+  ) {
+    this.pageDelayMs = this.configService.get<number>(
+      'WHOP_API_PAGE_DELAY_MS',
+      100,
+    );
   }
 
-  async fetchSubscriptionCreatePayments(startDate: Date, endDate: Date): Promise<any[]> {
-    return this.fetchPaymentsByBillingReason('subscription_create', startDate, endDate);
+  async fetchSubscriptionCyclePayments(
+    startDate: Date,
+    endDate: Date,
+  ): Promise<any[]> {
+    return this.fetchPaymentsByBillingReason(
+      'subscription_cycle',
+      startDate,
+      endDate,
+    );
+  }
+
+  async fetchSubscriptionCreatePayments(
+    startDate: Date,
+    endDate: Date,
+  ): Promise<any[]> {
+    return this.fetchPaymentsByBillingReason(
+      'subscription_create',
+      startDate,
+      endDate,
+    );
   }
 
   private async fetchPaymentsByBillingReason(
@@ -57,17 +82,24 @@ export class PaymentFetcherService {
       }
 
       pageCount++;
+
+      if (hasNextPage && pageCount < this.MAX_PAGES) {
+        await delay(this.pageDelayMs);
+      }
     }
 
     const uniquePayments = Array.from(
       new Map(allPayments.map((p) => [p.id, p])).values(),
     );
 
-    this.logger.info({
-      billingReason,
-      total: uniquePayments.length,
-      pages: pageCount,
-    }, 'Payments fetched');
+    this.logger.info(
+      {
+        billingReason,
+        total: uniquePayments.length,
+        pages: pageCount,
+      },
+      'Payments fetched',
+    );
 
     return uniquePayments;
   }

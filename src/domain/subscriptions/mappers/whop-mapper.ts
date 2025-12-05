@@ -158,7 +158,6 @@ export class WhopMapper {
   static mapPlan(whopPlan: any): PlanInfo | null {
     if (!whopPlan) return null;
 
-    // Handle case where plan is just an ID string
     if (typeof whopPlan === 'string') {
       return {
         id: whopPlan,

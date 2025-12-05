@@ -20,7 +20,6 @@ export class HealthService extends HealthIndicator {
   }
 
   async checkDatabase(): Promise<HealthIndicatorResult> {
-    // TODO: Implement real database check when Prisma/TypeORM is added
     const isHealthy = true;
     return this.getStatus('database', isHealthy, {
       message: isHealthy
@@ -50,7 +49,6 @@ export class HealthService extends HealthIndicator {
   }
 
   async checkQueue(): Promise<HealthIndicatorResult> {
-    // TODO: Implement real queue check when Bull/BullMQ is added
     const maxQueueSize = this.configService.get<number>('MAX_QUEUE_SIZE', 1000);
     const queueAlertThreshold = this.configService.get<number>(
       'QUEUE_ALERT_THRESHOLD',
@@ -105,10 +103,6 @@ export class HealthService extends HealthIndicator {
     });
   }
 
-  /**
-   * Check health of all providers
-   * Includes circuit breaker status and provider API health
-   */
   async checkProviders(): Promise<HealthIndicatorResult> {
     const activeProviders = this.providerRegistry.getActiveProviders();
     const providerHealthMap =

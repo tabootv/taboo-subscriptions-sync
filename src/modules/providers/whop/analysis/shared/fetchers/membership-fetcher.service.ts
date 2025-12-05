@@ -1,13 +1,24 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { logger } from '../../../../../../core/logger/logger.config';
+import { delay } from '../../../../../../core/utils';
 import { WhopApiClientService } from '../../../adapters/whop-api-client.service';
 
 @Injectable()
 export class MembershipFetcherService {
   private readonly logger = logger();
   private readonly MAX_PAGES = 200;
+  private readonly pageDelayMs: number;
 
-  constructor(private readonly whopApiClient: WhopApiClientService) {}
+  constructor(
+    private readonly whopApiClient: WhopApiClientService,
+    private readonly configService: ConfigService,
+  ) {
+    this.pageDelayMs = this.configService.get<number>(
+      'WHOP_API_PAGE_DELAY_MS',
+      100,
+    );
+  }
 
   async fetchByStatus(
     status: string | string[],
@@ -30,7 +41,8 @@ export class MembershipFetcherService {
           cursor,
         });
 
-        const memberships = response.data || response.memberships || response || [];
+        const memberships =
+          response.data || response.memberships || response || [];
         if (Array.isArray(memberships) && memberships.length > 0) {
           allMemberships.push(...memberships);
         }
@@ -45,6 +57,10 @@ export class MembershipFetcherService {
         }
 
         pageCount++;
+
+        if (hasNextPage && pageCount < this.MAX_PAGES) {
+          await delay(this.pageDelayMs);
+        }
       }
     }
 
@@ -52,10 +68,13 @@ export class MembershipFetcherService {
       new Map(allMemberships.map((m) => [m.id, m])).values(),
     );
 
-    this.logger.info({
-      statuses,
-      total: uniqueMemberships.length,
-    }, 'Memberships fetched');
+    this.logger.info(
+      {
+        statuses,
+        total: uniqueMemberships.length,
+      },
+      'Memberships fetched',
+    );
 
     return uniqueMemberships;
   }

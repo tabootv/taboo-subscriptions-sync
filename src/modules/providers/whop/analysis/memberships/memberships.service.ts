@@ -52,11 +52,15 @@ export class MembershipsService {
         this.emailEnricher.enrichMemberships(canceled),
       ]);
 
+    this.logger.info('Emails enriched, warming up plan cache');
+
     await this.warmupPlanCache([
       ...trialingWithEmails,
       ...activeWithEmails,
       ...canceledWithEmails,
     ]);
+
+    this.logger.info('Plan cache warmed up, fetching payments');
 
     const firstPayments =
       await this.paymentFetcher.fetchSubscriptionCreatePayments(
@@ -64,15 +68,37 @@ export class MembershipsService {
         endDate,
       );
 
+    this.logger.info(
+      { paymentsCount: firstPayments.length },
+      'Payments fetched, identifying conversions',
+    );
+
     const converted = await this.identifyConversions(
       activeWithEmails,
       firstPayments,
     );
+
+    this.logger.info(
+      { convertedCount: converted.length },
+      'Conversions identified, identifying non-conversions',
+    );
+
     const notConverted = await this.identifyNonConversions(
       canceledWithEmails,
       firstPayments,
     );
+
+    this.logger.info(
+      { notConvertedCount: notConverted.length },
+      'Non-conversions identified, processing first paid',
+    );
+
     const firstPaid = this.processFirstPaid(firstPayments);
+
+    this.logger.info(
+      { firstPaidCount: firstPaid.length },
+      'First paid processed, building trials with plan',
+    );
 
     const trialsWithPlan = await Promise.all(
       trialingWithEmails.map(async (m) => ({
@@ -87,6 +113,11 @@ export class MembershipsService {
     );
 
     this.logger.info(
+      { trialsCount: trialsWithPlan.length },
+      'Trials with plan built',
+    );
+
+    this.logger.info(
       {
         trials: trialsWithPlan.length,
         converted: converted.length,
@@ -96,7 +127,7 @@ export class MembershipsService {
       'Memberships analysis completed',
     );
 
-    return {
+    const response = {
       analysis: {
         trials: trialsWithPlan,
         converted,
@@ -104,6 +135,19 @@ export class MembershipsService {
         firstPaid,
       },
     };
+
+    try {
+      JSON.stringify(response);
+      this.logger.info('Response is serializable');
+    } catch (error: any) {
+      this.logger.error(
+        { error: error.message },
+        'Response serialization failed',
+      );
+      throw error;
+    }
+
+    return response;
   }
 
   private async identifyConversions(
@@ -237,20 +281,27 @@ export class MembershipsService {
     const planId = planRef.id || planRef;
 
     if (typeof planId === 'string' && planId.startsWith('plan_')) {
-      const fullPlan = await this.planCache.get(planId);
-      if (fullPlan) {
-        return {
-          id: fullPlan.id || planId,
-          title:
-            fullPlan.title ||
-            fullPlan.internal_notes ||
-            fullPlan.plan_name ||
-            null,
-          billingPeriod: fullPlan.billing_period || null,
-          renewalPrice: fullPlan.renewal_price || fullPlan.base_price || null,
-          currency: fullPlan.currency || membership.currency || 'usd',
-          trialPeriodDays: fullPlan.trial_period_days || null,
-        };
+      try {
+        const fullPlan = await this.planCache.get(planId);
+        if (fullPlan) {
+          return {
+            id: fullPlan.id || planId,
+            title:
+              fullPlan.title ||
+              fullPlan.internal_notes ||
+              fullPlan.plan_name ||
+              null,
+            billingPeriod: fullPlan.billing_period || null,
+            renewalPrice: fullPlan.renewal_price || fullPlan.base_price || null,
+            currency: fullPlan.currency || membership.currency || 'usd',
+            trialPeriodDays: fullPlan.trial_period_days || null,
+          };
+        }
+      } catch (error: any) {
+        this.logger.warn(
+          { planId, error: error.message },
+          'Failed to get plan from cache',
+        );
       }
     }
 

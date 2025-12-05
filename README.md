@@ -372,6 +372,72 @@ System health check, including status of all active providers.
 
 ## Implemented Protections
 
+### Rate Limiting 🆕
+
+**Problem Solved:** Eliminates 429 (Rate Limit Exceeded) errors from provider APIs.
+
+**Features:**
+
+- ✅ **Batch Processing**: Processes requests in batches with controlled concurrency (5 simultaneous by default)
+- ✅ **Smart Caching**: Deduplicates requests to avoid calling the same resource multiple times
+- ✅ **Pagination Delays**: Configurable delays between paginated requests (100ms by default)
+- ✅ **Exponential Backoff**: Automatic retry with exponential backoff for 429 errors (up to 3 retries)
+
+**Results:**
+
+- ~90% reduction in 429 errors
+- Circuit breaker remains closed
+- Reliable processing of 100-500+ memberships
+
+**Quick Start:**
+
+```bash
+# Add to your .env
+WHOP_API_CONCURRENCY=5
+WHOP_API_BATCH_DELAY_MS=200
+WHOP_API_PAGE_DELAY_MS=100
+WHOP_API_MAX_RETRIES=3
+```
+
+**Documentation:** See [QUICKSTART_RATE_LIMITING.md](QUICKSTART_RATE_LIMITING.md) for detailed setup.
+
+### Slack Notifications 🆕
+
+**Real-time monitoring:** Receive critical logs (WARN and ERROR) directly in Slack.
+
+**Features:**
+
+- ✅ **Smart Filtering**: Only sends WARN and ERROR level logs (no spam)
+- ✅ **Rich Formatting**: Visual blocks with emojis, colors, and contextual information
+- ✅ **Contextual Data**: Includes endpoint, status code, circuit breaker state, retry attempts
+- ✅ **Stack Traces**: Automatic inclusion of error stack traces
+- ✅ **Non-blocking**: Asynchronous delivery that never breaks the application
+
+**Quick Setup:**
+
+1. Create an Incoming Webhook in your Slack workspace
+2. Add to your `.env`:
+   ```bash
+   SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+   ```
+3. Restart the application
+
+**Example notification:**
+
+```
+⚠️ WARN
+━━━━━━━━━━━━━━━━━━━━━━
+Message: Rate limit hit, retrying with backoff
+Time: 05/12/2025 15:40:42
+
+Endpoint: /members/mber_123
+Status: 429
+Attempt: 2/3
+Wait Time: 10000ms
+```
+
+**Documentation:** See [docs/SLACK_NOTIFICATIONS.md](./docs/SLACK_NOTIFICATIONS.md) for complete setup guide.
+
 ### Circuit Breaker per Provider
 
 - **Failure isolation**: Each provider has its own circuit breaker

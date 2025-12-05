@@ -6,6 +6,7 @@ import {
   UnauthorizedException,
   UseInterceptors,
 } from '@nestjs/common';
+import { logger } from '../../../../../core/logger/logger.config';
 import { Timeout } from '../../../../../core/timeout/timeout.decorator';
 import { TimeoutInterceptor } from '../../../../../core/timeout/timeout.interceptor';
 import { MembershipsQueryDto } from './dto/memberships-query.dto';
@@ -15,10 +16,12 @@ import { MembershipsService } from './memberships.service';
 @Controller('analysis/whop/memberships')
 @UseInterceptors(TimeoutInterceptor)
 export class MembershipsController {
+  private readonly logger = logger();
+
   constructor(private readonly membershipsService: MembershipsService) {}
 
   @Get()
-  @Timeout(300000) // 5min
+  @Timeout(300000)
   async analyzeMemberships(
     @Headers('authorization') auth: string,
     @Query() query: MembershipsQueryDto,
@@ -27,8 +30,40 @@ export class MembershipsController {
       throw new UnauthorizedException('Authorization header required');
     }
 
-    const { startDate, endDate } = this.parseDates(query);
-    return this.membershipsService.analyzeMemberships(startDate, endDate);
+    try {
+      const { startDate, endDate } = this.parseDates(query);
+      const result = await this.membershipsService.analyzeMemberships(
+        startDate,
+        endDate,
+      );
+
+      this.logger.info(
+        {
+          trials: result.analysis.trials.length,
+          converted: result.analysis.converted.length,
+          notConverted: result.analysis.notConverted.length,
+          firstPaid: result.analysis.firstPaid.length,
+        },
+        'Returning memberships analysis response',
+      );
+
+      const responseSize = JSON.stringify(result).length;
+      this.logger.info(
+        { responseSizeBytes: responseSize },
+        'Response size calculated, sending response',
+      );
+
+      return result;
+    } catch (error: any) {
+      this.logger.error(
+        {
+          error: error.message,
+          stack: error.stack,
+        },
+        'Error in analyzeMemberships',
+      );
+      throw error;
+    }
   }
 
   /**

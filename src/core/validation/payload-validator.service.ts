@@ -7,15 +7,11 @@ import { logger } from '../logger/logger.config';
 export class PayloadValidatorService {
   private readonly logger = logger();
 
-  /**
-   * Validates basic payload structure before processing
-   */
   isValidPayloadStructure(payload: any): boolean {
     if (!payload || typeof payload !== 'object') {
       return false;
     }
 
-    // Checks if has at least 'event' ou 'data'
     if (!payload.event && !payload.data) {
       return false;
     }
@@ -23,9 +19,6 @@ export class PayloadValidatorService {
     return true;
   }
 
-  /**
-   * Validates if has required fields
-   */
   hasRequiredFields(payload: any, requiredFields: string[]): boolean {
     if (!payload || typeof payload !== 'object') {
       return false;
@@ -37,13 +30,7 @@ export class PayloadValidatorService {
     });
   }
 
-  /**
-   * Validates using DTO class-validator
-   */
-  async validateWithDto<T>(
-    payload: any,
-    dtoClass: new () => T,
-  ): Promise<T> {
+  async validateWithDto<T>(payload: any, dtoClass: new () => T): Promise<T> {
     const dto = plainToInstance(dtoClass, payload);
     const errors = await validate(dto as object);
 
@@ -64,30 +51,21 @@ export class PayloadValidatorService {
     return dto;
   }
 
-  /**
-   * Complete strict validation
-   */
   async validatePayload<T>(
     payload: unknown,
     dtoClass?: new () => T,
     requiredFields?: string[],
   ): Promise<T> {
-    // 1. Structural validation
     if (!this.isValidPayloadStructure(payload)) {
       this.logger.warn({ payload }, 'Invalid payload structure');
       throw new BadRequestException('Invalid payload structure');
     }
 
-    // 2. Required fields validation
     if (requiredFields && !this.hasRequiredFields(payload, requiredFields)) {
-      this.logger.warn(
-        { payload, requiredFields },
-        'Missing required fields',
-      );
+      this.logger.warn({ payload, requiredFields }, 'Missing required fields');
       throw new BadRequestException('Missing required fields');
     }
 
-    // 3. Validation with DTO if provided
     if (dtoClass) {
       return this.validateWithDto(payload, dtoClass);
     }

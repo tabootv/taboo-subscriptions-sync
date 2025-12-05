@@ -27,7 +27,6 @@ export interface RenewalCountDto {
 
 export interface RenewalStatsDto {
   total: number;
-  // All Whop membership statuses
   trialing: number;
   active: number;
   past_due: number;

@@ -5,7 +5,12 @@ import { AxiosRequestConfig } from 'axios';
 import { firstValueFrom } from 'rxjs';
 import { CircuitBreakerService } from '../../../../core/circuit-breaker/circuit-breaker.service';
 import { ProcessingLimitsService } from '../../../../core/limits/processing-limits.service';
+import { RateLimiterService } from '../../../../core/limits/rate-limiter.service';
 import { logger } from '../../../../core/logger/logger.config';
+import {
+  delayWithJitter,
+  parseRetryAfter,
+} from '../../../../core/utils/delay.util';
 
 @Injectable()
 export class WhopApiClientService {
@@ -13,6 +18,8 @@ export class WhopApiClientService {
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly companyId: string;
+  private readonly maxRetries: number;
+  private readonly retryBackoffBaseMs: number;
   private circuitBreaker: any;
 
   constructor(
@@ -20,31 +27,113 @@ export class WhopApiClientService {
     private readonly configService: ConfigService,
     private readonly circuitBreakerService: CircuitBreakerService,
     private readonly limitsService: ProcessingLimitsService,
+    private readonly rateLimiter: RateLimiterService,
   ) {
     this.baseUrl =
       this.configService.get<string>('WHOP_BASE_URL') ||
       'https://api.whop.com/api/v1';
     this.apiKey = this.configService.get<string>('WHOP_API_KEY') || '';
     this.companyId = this.configService.get<string>('WHOP_COMPANY_ID') || '';
+    this.maxRetries = this.configService.get<number>('WHOP_API_MAX_RETRIES', 3);
+    this.retryBackoffBaseMs = this.configService.get<number>(
+      'WHOP_API_RETRY_BACKOFF_BASE_MS',
+      1000,
+    );
   }
 
   private getCircuitBreaker(): any {
     if (!this.circuitBreaker) {
       const makeRequestWrapper = async (
-        args: [string, string, AxiosRequestConfig?],
+        args: [string, string, AxiosRequestConfig?, number?],
       ) => {
-        return this.makeRequest(args[0], args[1], args[2]);
+        return this.makeRequestWithRetry(args[0], args[1], args[2], args[3]);
       };
+
+      const circuitBreakerTimeout = 150000;
 
       this.circuitBreaker = this.circuitBreakerService.createCircuitBreaker(
         makeRequestWrapper,
         {
           name: 'whop-api',
-          timeout: this.limitsService.getApiCallTimeout(),
+          timeout: circuitBreakerTimeout,
         },
       );
     }
     return this.circuitBreaker;
+  }
+
+  /**
+   * Wrapper method that handles retries with backoff OUTSIDE the HTTP timeout
+   */
+  private async makeRequestWithRetry(
+    method: string,
+    endpoint: string,
+    config?: AxiosRequestConfig,
+    attempt: number = 0,
+  ): Promise<any> {
+    try {
+      const result = await this.makeRequest(method, endpoint, config);
+      return result;
+    } catch (error: any) {
+      const statusCode =
+        error.response?.status ||
+        error.status ||
+        HttpStatus.INTERNAL_SERVER_ERROR;
+
+      if (statusCode === 429 && attempt < this.maxRetries) {
+        this.rateLimiter.onRateLimitDetected();
+
+        const errorData = error.response?.data || {};
+        const errorMessage =
+          errorData.message ||
+          errorData.error?.message ||
+          errorData.error ||
+          error.message ||
+          'Whop API request failed';
+
+        const retryAfter = parseRetryAfter(
+          error.response?.headers?.['retry-after'] ||
+            error.response?.headers?.['Retry-After'],
+          errorMessage,
+        );
+
+        const backoffDelay = this.retryBackoffBaseMs * Math.pow(2, attempt);
+        const waitTime = Math.max(retryAfter, backoffDelay);
+
+        this.logger.warn(
+          {
+            endpoint,
+            method,
+            statusCode,
+            errorMessage,
+            attempt,
+            retryAfterFromMessage: retryAfter,
+            backoffDelay,
+            waitTime,
+            nextAttempt: attempt + 1,
+            maxRetries: this.maxRetries,
+          },
+          'Rate limit hit, retrying with backoff',
+        );
+
+        await delayWithJitter(waitTime, 30);
+        return this.makeRequestWithRetry(method, endpoint, config, attempt + 1);
+      }
+      if (statusCode === 429) {
+        this.logger.error(
+          {
+            endpoint,
+            method,
+            statusCode,
+            attempt,
+            retriesExhausted: true,
+          },
+          'Rate limit exceeded - max retries exhausted',
+        );
+      }
+
+      throw error;
+    }
   }
 
   private async makeRequest(
@@ -52,6 +141,8 @@ export class WhopApiClientService {
     endpoint: string,
     config?: AxiosRequestConfig,
   ): Promise<any> {
+    await this.rateLimiter.acquire();
+
     const upperMethod = method.toUpperCase();
     if (upperMethod !== 'GET') {
       this.logger.error(
@@ -120,6 +211,7 @@ export class WhopApiClientService {
       const response = await firstValueFrom(
         this.httpService.request(requestConfig),
       );
+      this.rateLimiter.onSuccess();
       return response.data;
     } catch (error: any) {
       const statusCode =
@@ -142,7 +234,9 @@ export class WhopApiClientService {
         whopError: errorData,
       };
 
-      this.logger.error(errorDetails, 'Whop API request failed');
+      if (statusCode !== 429) {
+        this.logger.error(errorDetails, 'Whop API request failed');
+      }
 
       let userFriendlyMessage = 'Whop API error';
       if (statusCode === 400) {

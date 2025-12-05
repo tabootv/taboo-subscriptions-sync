@@ -25,7 +25,10 @@ export class PlanCacheService {
       this.cacheTimestamps.set(planId, Date.now());
       return plan;
     } catch (error: any) {
-      this.logger.warn({ planId, error: error.message }, 'Failed to fetch plan');
+      this.logger.warn(
+        { planId, error: error.message },
+        'Failed to fetch plan',
+      );
       return null;
     }
   }
@@ -37,13 +40,30 @@ export class PlanCacheService {
       return !timestamp || Date.now() - timestamp >= this.CACHE_TTL_MS;
     });
 
-    if (toFetch.length === 0) return;
+    if (toFetch.length === 0) {
+      this.logger.info('Plan cache warmup skipped - all plans cached');
+      return;
+    }
+
+    this.logger.info(
+      { total: uniqueIds.length, toFetch: toFetch.length },
+      'Warming up plan cache',
+    );
 
     const BATCH_SIZE = 10;
     for (let i = 0; i < toFetch.length; i += BATCH_SIZE) {
       const batch = toFetch.slice(i, i + BATCH_SIZE);
+      this.logger.info(
+        {
+          batch: i / BATCH_SIZE + 1,
+          totalBatches: Math.ceil(toFetch.length / BATCH_SIZE),
+        },
+        'Fetching plan batch',
+      );
       await Promise.all(batch.map((id) => this.get(id)));
     }
+
+    this.logger.info('Plan cache warmup completed');
   }
 
   clearCache(): void {

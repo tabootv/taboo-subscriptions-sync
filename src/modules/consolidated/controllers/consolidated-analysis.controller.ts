@@ -1,10 +1,3 @@
-/**
- * Consolidated Analysis Controller
- *
- * Provides unified API endpoints that aggregate data from all payment providers.
- * Clients can query subscription/membership data across multiple providers in a single request.
- */
-
 import {
   Controller,
   Get,
@@ -71,25 +64,21 @@ export class ConsolidatedAnalysisController {
    * }
    */
   @Get()
-  @Timeout(600000) // 10min timeout (analyzing multiple providers can take time)
+  @Timeout(600000)
   async analyzeConsolidated(
     @Headers('authorization') auth: string,
     @Query() query: ConsolidatedAnalysisQueryDto,
   ): Promise<ConsolidatedAnalysisResponseDto> {
-    // Authentication check
     if (!auth) {
       throw new UnauthorizedException('Authorization header required');
     }
 
-    // Parse dates
     const { startDate, endDate } = this.parseDates(query);
 
-    // Parse providers (if specified)
     const providers = query.providers
       ? query.providers.split(',').map((p) => p.trim())
       : undefined;
 
-    // Execute consolidated analysis
     return this.consolidatedAnalysisService.analyzeAll(
       startDate,
       endDate,
@@ -98,10 +87,6 @@ export class ConsolidatedAnalysisController {
     );
   }
 
-  /**
-   * Parse startDate/endDate from query parameters
-   * Defaults to yesterday if not provided
-   */
   private parseDates(query: ConsolidatedAnalysisQueryDto): {
     startDate: Date;
     endDate: Date;
@@ -117,9 +102,6 @@ export class ConsolidatedAnalysisController {
     return { startDate, endDate };
   }
 
-  /**
-   * Get yesterday at 00:00:00 UTC
-   */
   private getYesterday(): Date {
     const yesterday = new Date();
     yesterday.setUTCDate(yesterday.getUTCDate() - 1);
@@ -127,9 +109,6 @@ export class ConsolidatedAnalysisController {
     return yesterday;
   }
 
-  /**
-   * Get yesterday at 23:59:59 UTC
-   */
   private getEndOfYesterday(): Date {
     const endOfYesterday = new Date();
     endOfYesterday.setUTCDate(endOfYesterday.getUTCDate() - 1);

@@ -1,7 +1,6 @@
 import { Transform } from 'class-transformer';
 import { IsArray, IsIn, IsInt, IsOptional, Max, Min } from 'class-validator';
 
-// All valid Whop membership statuses
 export const VALID_MEMBERSHIP_STATUSES = [
   'trialing',
   'active',

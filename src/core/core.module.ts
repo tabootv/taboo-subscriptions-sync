@@ -6,6 +6,7 @@ import { CircuitBreakerService } from './circuit-breaker/circuit-breaker.service
 import { DeadLetterQueueService } from './dlq/dead-letter-queue.service';
 import { GracefulDegradationService } from './graceful-degradation/graceful-degradation.service';
 import { ProcessingLimitsService } from './limits/processing-limits.service';
+import { RateLimiterService } from './limits/rate-limiter.service';
 import { ProvidersModule } from './providers/providers.module';
 import { PayloadValidatorService } from './validation/payload-validator.service';
 
@@ -22,6 +23,7 @@ import { PayloadValidatorService } from './validation/payload-validator.service'
   providers: [
     CircuitBreakerService,
     ProcessingLimitsService,
+    RateLimiterService,
     PayloadValidatorService,
     DeadLetterQueueService,
     CheckpointService,
@@ -31,6 +33,7 @@ import { PayloadValidatorService } from './validation/payload-validator.service'
     HttpModule,
     CircuitBreakerService,
     ProcessingLimitsService,
+    RateLimiterService,
     PayloadValidatorService,
     DeadLetterQueueService,
     CheckpointService,
