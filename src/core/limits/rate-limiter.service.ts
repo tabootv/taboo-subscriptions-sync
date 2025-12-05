@@ -14,6 +14,7 @@ export class RateLimiterService {
   private lastRequestTime = 0;
   private consecutiveRateLimits = 0;
   private readonly maxConsecutiveRateLimits = 3;
+  private pauseUntil = 0;
 
   constructor(private readonly configService: ConfigService) {
     this.requestsPerSecond = this.configService.get<number>(
@@ -45,17 +46,20 @@ export class RateLimiterService {
       if (!request) break;
 
       const now = Date.now();
+      const waitForBackoff = Math.max(0, this.pauseUntil - now);
       const timeSinceLastRequest = now - this.lastRequestTime;
-      const delayNeeded = Math.max(
+      const waitForSpacing = Math.max(
         0,
         this.minDelayBetweenRequests - timeSinceLastRequest,
       );
+      const delayNeeded = Math.max(waitForBackoff, waitForSpacing);
 
       if (delayNeeded > 0) {
         await delay(delayNeeded);
       }
 
       this.lastRequestTime = Date.now();
+      this.pauseUntil = 0;
       request.resolve();
     }
 
@@ -66,7 +70,7 @@ export class RateLimiterService {
     this.consecutiveRateLimits++;
     if (this.consecutiveRateLimits >= this.maxConsecutiveRateLimits) {
       const backoffDelay = Math.min(this.minDelayBetweenRequests * 5, 10000);
-      this.lastRequestTime = Date.now() + backoffDelay;
+      this.pauseUntil = Math.max(this.pauseUntil, Date.now() + backoffDelay);
       this.consecutiveRateLimits = 0;
     }
   }

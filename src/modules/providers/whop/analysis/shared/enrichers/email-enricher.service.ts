@@ -35,7 +35,7 @@ export class EmailEnricherService {
   ) {
     this.concurrencyLimit = this.configService.get<number>(
       'WHOP_API_CONCURRENCY',
-      1,
+      5,
     );
     this.batchDelayMs = this.configService.get<number>(
       'WHOP_API_BATCH_DELAY_MS',

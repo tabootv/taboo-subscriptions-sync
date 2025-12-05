@@ -19,16 +19,16 @@ export const logger = () => {
       level: 'warn',
       stream: slackTransport,
     });
-  }
+        }
 
   const pinoLogger = pino(
     {
       level: logLevel,
-      formatters: {
-        level: (label) => {
-          return { level: label };
-        },
+    formatters: {
+      level: (label) => {
+        return { level: label };
       },
+    },
     },
     pino.multistream(streams),
   );
